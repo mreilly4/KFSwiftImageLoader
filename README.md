@@ -1,8 +1,9 @@
 # KFSwiftImageLoader
 
-### Appleseed Changes:
-
+Appleseed Changes:
+-----
 GIF Support, loads GIF from URL responsecache in order to retain gif data
+
 -----
 
 KFSwiftImageLoader is an extremely high-performance, lightweight, and energy-efficient pure Swift async web image loader with memory and disk caching for iOS and  Watch.
