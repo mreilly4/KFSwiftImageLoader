@@ -4,6 +4,7 @@
 //
 
 import UIKit
+import ImageIO
 
 // MARK: - UIImageView Associated Object Keys
 private var indexPathIdentifierAssociationKey: UInt8 = 0
@@ -88,6 +89,7 @@ public extension UIImageView {
         
         guard let urlAbsoluteString = request.url?.absoluteString else {
             self.completionHolder.completion?(false, nil)
+            print("about to return on 92")
             return
         }
         
@@ -96,25 +98,73 @@ public extension UIImageView {
         let sharedURLCache = URLCache.shared
         
         func loadImage(_ image: UIImage) -> Void {
-            UIView.transition(with: self, duration: fadeAnimationDuration, options: .transitionCrossDissolve, animations: {
-                self.image = image
-            })
+            print("about to loadImage on 101")
+            DispatchQueue.main.async {
+////                if initialIndexIdentifier == self.indexPathIdentifier {
+                UIView.transition(with: self, duration: fadeAnimationDuration, options: .transitionCrossDissolve, animations: {
+                    print("about to set Image on 105")
+                    self.image = image
+                    
+                })
+                self.completionHolder.completion?(true, nil)
+//                }
+            }
             
-            self.completionHolder.completion?(true, nil)
+//            self.completionHolder.completion?(true, nil)
         }
         
         // If there's already a cached image, load it into the image view.
         if let image = cacheManager[urlAbsoluteString] {
+            print("about to loadImage 116")
             loadImage(image)
+            if urlAbsoluteString.contains(".gif")
+            {
+                if let cachedResponse = sharedURLCache.cachedResponse(for: request), let creationTimestamp = cachedResponse.userInfo?["creationTimestamp"] as? CFTimeInterval, (Date.timeIntervalSinceReferenceDate - creationTimestamp) < Double(cacheManager.diskCacheMaxAge)
+                {
+                    print("1 image data : \(cachedResponse.data)")
+                    if let source = CGImageSourceCreateWithData(cachedResponse.data as CFData, nil)
+                    {
+                        print("1 IMAGE IS GIF! in cacheresponse")
+                        loadImage(self.animatedImageWithSource(source)!)
+                        cacheManager[urlAbsoluteString] = self.animatedImageWithSource(source)!
+                    }
+                    else
+                    {
+                        print("1 image doesn't exist")
+                    }
+                }
+            }
+            else
+            {
+//                loadImage(image)
+                print("NOTHING TO DO.  WE HAVE IMAGE AND NOT GIFF")
+            }
         }
         // If there's already a cached response, load the image data into the image view.
         else if let cachedResponse = sharedURLCache.cachedResponse(for: request), let image = UIImage(data: cachedResponse.data), let creationTimestamp = cachedResponse.userInfo?["creationTimestamp"] as? CFTimeInterval, (Date.timeIntervalSinceReferenceDate - creationTimestamp) < Double(cacheManager.diskCacheMaxAge) {
-            loadImage(image)
-            
-            cacheManager[urlAbsoluteString] = image
+            if urlAbsoluteString.contains(".gif")
+            {
+                print("2 image data : \(cachedResponse.data)")
+                if let source = CGImageSourceCreateWithData(cachedResponse.data as CFData, nil)
+                {
+                    print("2 IMAGE IS GIF! in cacheresponse")
+                    loadImage(self.animatedImageWithSource(source)!)
+                    cacheManager[urlAbsoluteString] = self.animatedImageWithSource(source)!
+                }
+                else
+                {
+                    print("2 image doesn't exist")
+                }
+            }
+            else
+            {
+                loadImage(image)
+                cacheManager[urlAbsoluteString] = image
+            }
         }
         // Either begin downloading the image or become an observer for an existing request.
-        else {
+        else
+        {
             // Remove the stale disk-cached response (if any).
             sharedURLCache.removeCachedResponse(for: request)
             
@@ -164,11 +214,10 @@ public extension UIImageView {
             // If the image isn't already being downloaded, begin downloading the image.
             if cacheManager.isDownloadingFromURL(urlAbsoluteString) == false {
                 cacheManager.setIsDownloadingFromURL(true, forURLString: urlAbsoluteString)
-                
                 let dataTask = cacheManager.session.dataTask(with: request) {
                     taskData, taskResponse, taskError in
                     
-                    guard let data = taskData, let response = taskResponse, let image = UIImage(data: data), taskError == nil else {
+                    guard let data = taskData, let response = taskResponse, var image = UIImage(data: data), taskError == nil else {
                         DispatchQueue.main.async {
                             cacheManager.setIsDownloadingFromURL(false, forURLString: urlAbsoluteString)
                             cacheManager.removeImageCacheObserversForKey(urlAbsoluteString)
@@ -177,7 +226,54 @@ public extension UIImageView {
                         
                         return
                     }
-                    
+                    print("3 urlAbsoluteString : \(urlAbsoluteString)")
+                    if urlAbsoluteString.contains(".gif")
+                    {
+                        if let source = CGImageSourceCreateWithData(data as CFData, nil)
+                        {
+                            print("3 NEW IMAGE IS GIF!")
+                            print("3 source : \(source)")
+                            DispatchQueue.main.async {
+                                if initialIndexIdentifier == self.indexPathIdentifier {
+                                    UIView.transition(with: self, duration: fadeAnimationDuration, options: .transitionCrossDissolve, animations: {
+                                        self.image = self.animatedImageWithSource(source)
+                                    })
+                                }
+                                
+                                cacheManager[urlAbsoluteString] = self.animatedImageWithSource(source)
+                                
+                                let responseDataIsCacheable = cacheManager.diskCacheMaxAge > 0 &&
+                                    Double(data.count) <= 0.05 * Double(sharedURLCache.diskCapacity) &&
+                                    (cacheManager.session.configuration.requestCachePolicy == .returnCacheDataElseLoad ||
+                                        cacheManager.session.configuration.requestCachePolicy == .returnCacheDataDontLoad) &&
+                                    (request.cachePolicy == .returnCacheDataElseLoad ||
+                                        request.cachePolicy == .returnCacheDataDontLoad)
+                                
+                                if let httpResponse = response as? HTTPURLResponse, let url = httpResponse.url, responseDataIsCacheable {
+                                    if var allHeaderFields = httpResponse.allHeaderFields as? [String: String] {
+                                        allHeaderFields["Cache-Control"] = "max-age=\(cacheManager.diskCacheMaxAge)"
+                                        if let cacheControlResponse = HTTPURLResponse(url: url, statusCode: httpResponse.statusCode, httpVersion: "HTTP/1.1", headerFields: allHeaderFields) {
+                                            let cachedResponse = CachedURLResponse(response: cacheControlResponse, data: data, userInfo: ["creationTimestamp": Date.timeIntervalSinceReferenceDate], storagePolicy: .allowed)
+                                            sharedURLCache.storeCachedResponse(cachedResponse, for: request)
+                                        }
+                                    }
+                                }
+                                
+                                self.completionHolder.completion?(true, nil)
+                            }
+                        }
+                        else
+                        {
+                            print("3 image doesn't exist")
+                            
+                        }
+                        
+                        //                            self.image = animatedImageWithSource(source)
+                        //                            cacheManager[urlAbsoluteString] = self.image
+                    }
+                    else
+                    {
+                        print("3 else NOT a GIF")
                     DispatchQueue.main.async {
                         if initialIndexIdentifier == self.indexPathIdentifier {
                             UIView.transition(with: self, duration: fadeAnimationDuration, options: .transitionCrossDissolve, animations: {
@@ -206,6 +302,7 @@ public extension UIImageView {
                         
                         self.completionHolder.completion?(true, nil)
                     }
+                    }
                 }
                 
                 dataTask.resume()
@@ -216,5 +313,143 @@ public extension UIImageView {
                 cacheManager.addImageCacheObserver(weakSelf!, withInitialIndexIdentifier: initialIndexIdentifier, forKey: urlAbsoluteString)
             }
         }
+    }
+    
+    func delayForImageAtIndex(_ index: Int, source: CGImageSource!) -> Double {
+        var delay = 0.1
+        print("source : \(source!)")
+        let cfProperties = CGImageSourceCopyPropertiesAtIndex(source!, index, nil)
+        print("cfProperties : \(cfProperties!)")
+        if let gifProperties: CFDictionary = unsafeBitCast(
+            CFDictionaryGetValue(cfProperties!,
+                                 Unmanaged.passUnretained(kCGImagePropertyGIFDictionary).toOpaque()),
+            to: CFDictionary.self)
+        {
+            //need to input this data if image doe not have it....
+
+//            print("kcgImagePropertyGIFDictionary         : \(CFDictionaryContainsKey(cfProperties, "{GIF}"))")
+//
+//            let customGifProperties = [kCGImagePropertyGIFDictionary as String: [kCGImagePropertyGIFDelayTime as String: 0.1, kCGImagePropertyGIFUnclampedDelayTime as String: 0.1]] as! CFDictionary
+//            print("gifProperties : \(String(describing: customGifProperties))")
+//            let customGifPropertiesDict = unsafeBitCast(CFDictionaryGetValue(customGifProperties, Unmanaged.passUnretained(kCGImagePropertyGIFDictionary).toOpaque()), to: CFDictionary.self)
+            
+            
+            
+            
+        var delayObject: AnyObject = unsafeBitCast(
+            CFDictionaryGetValue(gifProperties as CFDictionary,
+                                 Unmanaged.passUnretained(kCGImagePropertyGIFUnclampedDelayTime).toOpaque()),
+            to: AnyObject.self)
+        
+        if delayObject.doubleValue == 0 {
+            delayObject = unsafeBitCast(CFDictionaryGetValue(gifProperties,
+                                                             Unmanaged.passUnretained(kCGImagePropertyGIFDelayTime).toOpaque()), to: AnyObject.self)
+        }
+        
+        delay = delayObject as! Double
+        }
+        else
+        {
+            delay = 0.1
+        }
+        if delay < 0.1 {
+            delay = 0.1
+        }
+        
+        return delay
+    }
+    
+    func gcdForPair(_ a: Int?, _ b: Int?) -> Int {
+        var a = a
+        var b = b
+        if b == nil || a == nil {
+            if b != nil {
+                return b!
+            } else if a != nil {
+                return a!
+            } else {
+                return 0
+            }
+        }
+        
+        if a! < b! {
+            let c = a
+            a = b
+            b = c
+        }
+        
+        var rest: Int
+        while true {
+            rest = a! % b!
+            
+            if rest == 0 {
+                return b!
+            } else {
+                a = b
+                b = rest
+            }
+        }
+    }
+    
+    func gcdForArray(_ array: Array<Int>) -> Int {
+        if array.isEmpty {
+            return 1
+        }
+        
+        var gcd = array[0]
+        
+        for val in array {
+            gcd = gcdForPair(val, gcd)
+        }
+        
+        return gcd
+    }
+    
+    func animatedImageWithSource(_ source: CGImageSource) -> UIImage? {
+        let count = CGImageSourceGetCount(source)
+        var images = [CGImage]()
+        
+        var delays = [Int]()
+        
+        for i in 0..<count {
+            if let image = CGImageSourceCreateImageAtIndex(source, i, nil) {
+                images.append(image)
+            }
+            
+            let delaySeconds = delayForImageAtIndex(Int(i),
+                                                    source: source)
+            delays.append(Int(delaySeconds * 1000.0)) // Seconds to ms
+        }
+        
+        let duration: Int = {
+            var sum = 0
+            
+            for val: Int in delays {
+                sum += val
+            }
+            
+            return sum
+        }()
+        
+        
+        
+        let gcd = gcdForArray(delays)
+        var frames = [UIImage]()
+        
+        var frame: UIImage
+        var frameCount: Int
+        for i in 0..<count {
+            frame = UIImage(cgImage: images[Int(i)])
+            frameCount = Int(delays[Int(i)] / gcd)
+            
+            for _ in 0..<frameCount {
+                frames.append(frame)
+            }
+        }
+        
+        let animation = UIImage.animatedImage(with: frames,
+                                              duration: Double(duration) / 1000.0)
+        
+        return animation
     }
 }
